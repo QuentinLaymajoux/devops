@@ -1,0 +1,50 @@
+- name: install mysl-serveur et packages 
+  apt: 
+    name: 
+      - mysql-client
+      - mysql-common
+      - mysql-server
+      - python3-pymysql
+  become: true
+  
+- name: start serveur mysql
+  service:
+    name: mysql
+    state: started
+    enabled: yes
+  become: true
+
+- name: Set root user password
+  mysql_user: 
+    name: root
+    login_user: "{{db_root}}"
+    password: "{{db_root_pass}}"
+    priv: "*.*:ALL,GRANT"
+    state: present
+    host: "localhost"
+    login_unix_socket: /var/run/mysqld/mysqld.sock
+    check_implicit_admin: true
+  become: true
+
+- name: création user
+  mysql_user:
+    name: "{{db_user}}"
+    password: "{{db_pass}}"
+    login_user: "{{db_root}}"
+    login_password: "{{db_root_pass}}"
+    priv: '*.*:ALL'
+    host: '%'
+    state: present
+
+- name: copie fichier sql bdd
+  copy: 
+    src: task_bdd.sql
+    dest: /tmp/task_bdd.sql
+
+- name: création BDD
+  mysql_db:
+    name: "{{db_name}}"
+    login_user: "{{db_root}}"
+    login_password: "{{db_root_pass}}"
+    state: import
+    target: /tmp/task_bdd.sql

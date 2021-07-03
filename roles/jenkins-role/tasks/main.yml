@@ -1,0 +1,175 @@
+- name: Add Jenkins Key
+  become: true
+  ansible.builtin.apt_key:
+    url: https://pkg.jenkins.io/debian-stable/jenkins.io.key
+    state: present
+
+- name: Add specified repository into sources list
+  become: true
+  ansible.builtin.apt_repository:
+    repo: deb https://pkg.jenkins.io/debian-stable binary/
+    state: present
+
+- name: Install jenkins
+  become: true
+  apt:
+    name: jenkins
+
+- name: start jenkins
+  systemd:
+    name: jenkins
+    state: started
+
+- name: enable jenkins
+  systemd:
+    name: jenkins
+    enabled: true
+
+- name: Create group admin
+  group:
+    name: "admin"
+    state: present
+
+- name: Create Users admin
+  user:
+    name: "admin"
+    state: present
+
+- name: Configure JVM Arguments to disable jenkins setup wizard
+  become: true
+  lineinfile:
+      dest: /etc/default/jenkins
+      regexp: '^JAVA_ARGS='
+      line: 'JAVA_ARGS="-Djava.awt.headless=true -Djenkins.install.runSetupWizard=false"'
+      insertbefore: '^DAEMON_ARGS='
+
+- name: Create custom init scripts directory.
+  become: true
+  file:
+    path: "/var/lib/jenkins/init.groovy.d"
+    state: directory
+    owner: "admin"
+    group: "admin"
+    mode: 0775
+
+- name: configure default users
+  become: true
+  template:
+    src: basic-security.groovy.j2
+    dest: "/var/lib/jenkins/init.groovy.d/basic-security.groovy"
+    owner: "admin"
+    group: "admin"
+    mode: 0775
+  register: jenkins_users_config
+
+- name: restart jenkins
+  become: true
+  service: name=jenkins state=restarted
+
+- name: Wait for Jenkins to start up before proceeding.
+  uri:
+    url: http://localhost:8080
+    method: GET
+    return_content: "yes"
+    timeout: 5
+    body_format: raw
+    follow_redirects: "no"
+    status_code: 200,403
+  register: result
+  until: (result.status == 403 or result.status == 200) and (result.content.find("Please wait while") == -1)
+  retries: 60
+  delay: 5
+  changed_when: false
+  check_mode: false
+
+- name: Set Jenkins admin password fact.
+  set_fact:
+    jenkins_admin_password: "admin"
+  no_log: true
+
+# Update Jenkins so that plugin updates don't fail.
+- name: Create Jenkins updates directory.
+  file:
+    path: "/var/lib/jenkins/updates"
+    state: directory
+    owner: jenkins
+    group: jenkins
+    mode: 0755
+
+- name: Download current plugin updates from Jenkins update site.
+  get_url:
+    url: "https://updates.jenkins.io/update-center.json"
+    dest: "/var/lib/jenkins/updates/default.json"
+    owner: jenkins
+    group: jenkins
+    mode: 0440
+  changed_when: false
+  register: get_result
+  until: get_result is success
+  retries: 3
+  delay: 2
+
+- name: Remove first and last line from json file.
+  replace:  # noqa 208
+    path: "/var/lib/jenkins//updates/default.json"
+    regexp: "1d;$d"
+
+- name: Install Jenkins build-pipeline-plugin using password.
+  jenkins_plugin:
+    name: "build-pipeline-plugin"
+    jenkins_home: "/var/lib/jenkins"
+    url_username: "admin"
+    url_password: "admin"
+    updates_url: "https://updates.jenkins.io"
+    url: "http://localhost:8080"
+    with_dependencies: "true"
+  register: plugin_result
+  until: plugin_result is success
+  retries: 3
+  delay: 2
+
+- name: Install Jenkins xUnit using password.
+  jenkins_plugin:
+    name: "xUnit"
+    jenkins_home: "/var/lib/jenkins"
+    url_username: "admin"
+    url_password: "admin"
+    updates_url: "https://updates.jenkins.io"
+    url: "http://localhost:8080"
+    with_dependencies: "true"
+  register: plugin_result
+  until: plugin_result is success
+  retries: 3
+  delay: 2
+
+- name: restart jenkins
+  become: true
+  service: name=jenkins state=restarted
+
+- name: Wait for Jenkins to start up
+  uri:
+    url: http://localhost:8080
+    status_code: 200
+    timeout: 5
+  register: jenkins_service_status
+  # Keep trying for 5 mins in 5 sec intervals
+  retries: 60
+  delay: 5
+  until: >
+    'status' in jenkins_service_status and
+    jenkins_service_status['status'] == 200
+
+# - name: Install jenkins plugin
+#   jenkins_plugin:
+#     name: build-pipeline-plugin
+# - name: init password jenkin
+#   become: true
+#   shell: cat /var/lib/jenkins/secrets/initialAdminPassword
+#   changed_when: false
+#   register: result
+
+
+
+# - name: print init password jenkins
+#   debug:
+#     var: result.stdout
